@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>URL//SHORT</title>
+<style>
+  :root {
+    --bg: #050805;
+    --fg: #39ff72;
+    --dim: #168c3b;
+    --error: #ff4d4d;
+    --border: #145c2b;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  main {
+    width: min(900px, 100%);
+  }
+
+  .terminal {
+    border: 1px solid var(--border);
+    padding: clamp(18px, 4vw, 34px);
+    box-shadow: 0 0 24px rgba(57,255,114,.07);
+  }
+
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 30px;
+    color: var(--dim);
+    font-size: 12px;
+    letter-spacing: .08em;
+  }
+
+  h1 {
+    margin: 0 0 8px;
+    font-size: clamp(22px, 5vw, 38px);
+    font-weight: 700;
+    letter-spacing: .03em;
+  }
+
+  .prompt {
+    color: var(--dim);
+    margin-bottom: 10px;
+    font-size: 13px;
+  }
+
+  .prompt::before { content: "$ "; }
+
+  input {
+    display: block;
+    width: 100%;
+    border: 1px solid var(--border);
+    outline: 0;
+    background: #020402;
+    color: var(--fg);
+    padding: 15px 16px;
+    font: inherit;
+    font-size: 15px;
+    caret-color: var(--fg);
+  }
+
+  input:focus {
+    border-color: var(--fg);
+    box-shadow: 0 0 12px rgba(57,255,114,.08);
+  }
+
+  input::placeholder { color: #176b30; }
+
+  .result {
+    margin-top: 24px;
+  }
+
+  .result-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+  }
+
+  #output {
+    min-width: 0;
+    word-break: break-all;
+    border: 1px solid var(--border);
+    padding: 14px 16px;
+    color: var(--fg);
+    background: #020402;
+    min-height: 49px;
+  }
+
+  button {
+    border: 1px solid var(--fg);
+    background: transparent;
+    color: var(--fg);
+    padding: 0 18px;
+    font: inherit;
+    cursor: pointer;
+    min-height: 49px;
+  }
+
+  button:hover, button:focus-visible {
+    background: var(--fg);
+    color: var(--bg);
+    outline: 0;
+  }
+
+  button:disabled {
+    opacity: .35;
+    cursor: default;
+  }
+
+  .status {
+    min-height: 20px;
+    margin-top: 10px;
+    color: var(--dim);
+    font-size: 12px;
+  }
+
+  .status.error { color: var(--error); }
+
+  .footer {
+    margin-top: 34px;
+    color: #0f5426;
+    font-size: 11px;
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+  }
+
+  .cursor::after {
+    content: "█";
+    animation: blink 1s steps(1) infinite;
+    margin-left: 4px;
+  }
+
+  @keyframes blink { 50% { opacity: 0; } }
+
+  @media (max-width: 600px) {
+    body { padding: 12px; }
+    .terminal { padding: 18px; }
+    .result-row { grid-template-columns: 1fr; }
+    button { width: 100%; }
+    .topbar { margin-bottom: 22px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <section class="terminal" aria-label="URL shortener">
+    <div class="topbar">
+      <span>URL//SHORT</span>
+      <span>NO DATABASE</span>
+    </div>
+
+    <h1>URL SHORTENER</h1>
+    <div class="prompt">PASTE URL</div>
+    <input id="input" type="text" inputmode="url"
+           autocomplete="off" autocapitalize="off" spellcheck="false"
+           placeholder="https://example.com/..." aria-label="URL to shorten">
+
+    <div class="result">
+      <div class="prompt">GENERATED URL</div>
+      <div class="result-row">
+        <div id="output" aria-live="polite">waiting<span class="cursor"></span></div>
+        <button id="copy" type="button" disabled>COPY</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+
+    <div class="footer">
+      <span>CLIENT-SIDE / ZERO BACKEND</span>
+      <span>v1</span>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  const PARAMETER = "0";
+  const ERROR_URL = "https://perdu.com/";
+  const input = document.getElementById("input");
+  const output = document.getElementById("output");
+  const copyButton = document.getElementById("copy");
+  const status = document.getElementById("status");
+
+  let generation = 0;
+
+  // UTF-8 -> Base64URL
+  function bytesToBase64Url(bytes) {
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  }
+
+  // Base64URL -> bytes
+  function base64UrlToBytes(value) {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  async function streamToBytes(stream) {
+    const buffer = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buffer);
+  }
+
+  async function compress(text) {
+    if (!("CompressionStream" in window)) {
+      throw new Error("CompressionStream unavailable");
+    }
+    const data = new TextEncoder().encode(text);
+
+    // "deflate" is broadly supported and includes a tiny zlib wrapper.
+    // This is preferable to requiring an external library in a zero-backend app.
+    const stream = new CompressionStream("deflate");
+    const writer = stream.writable.getWriter();
+    writer.write(data);
+    writer.close();
+
+    return streamToBytes(stream.readable);
+  }
+
+  async function decompress(bytes) {
+    if (!("DecompressionStream" in window)) {
+      throw new Error("DecompressionStream unavailable");
+    }
+
+    const stream = new DecompressionStream("deflate");
+    const writer = stream.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+
+    const result = await streamToBytes(stream.readable);
+    return new TextDecoder("utf-8", { fatal: true }).decode(result);
+  }
+
+  async function encodeUrl(url) {
+    const compressed = await compress(url);
+    return bytesToBase64Url(compressed);
+  }
+
+  async function decodePayload(payload) {
+    return decompress(base64UrlToBytes(payload));
+  }
+
+  // Prevent execution of active-content schemes while still allowing
+  // normal non-HTTP schemes such as mailto:, ftp:, tel:, etc.
+  function isSafeDestination(url) {
+    try {
+      const parsed = new URL(url);
+      return !["javascript:", "vbscript:", "data:"].includes(parsed.protocol.toLowerCase());
+    } catch {
+      return false;
+    }
+  }
+
+  function shortenerOrigin() {
+    return location.origin + location.pathname;
+  }
+
+  function setStatus(message, error = false) {
+    status.textContent = message;
+    status.className = "status" + (error ? " error" : "");
+  }
+
+  async function generate() {
+    const current = ++generation;
+    const value = input.value.trim();
+
+    copyButton.disabled = true;
+
+    if (!value) {
+      output.textContent = "waiting";
+      setStatus("");
+      return;
+    }
+
+    try {
+      const payload = await encodeUrl(value);
+      if (current !== generation) return;
+
+      const result = `${shortenerOrigin()}?${encodeURIComponent(PARAMETER)}=${payload}`;
+      output.textContent = result;
+      copyButton.disabled = false;
+
+      const ratio = value.length
+        ? Math.round((result.length / value.length) * 100)
+        : 0;
+
+      setStatus(`OK // ${value.length} chars → ${result.length} chars (${ratio}% of original)`);
+    } catch (error) {
+      if (current !== generation) return;
+      output.textContent = "ERROR";
+      setStatus("ERROR // compression unavailable in this browser", true);
+    }
+  }
+
+  copyButton.addEventListener("click", async () => {
+    const value = output.textContent;
+    if (!value || value === "waiting" || value === "ERROR") return;
+
+    try {
+      await navigator.clipboard.writeText(value);
+      const old = copyButton.textContent;
+      copyButton.textContent = "COPIED";
+      setStatus("OK // URL copied to clipboard");
+      setTimeout(() => { copyButton.textContent = old; }, 1200);
+    } catch {
+      setStatus("ERROR // clipboard access denied", true);
+    }
+  });
+
+  input.addEventListener("input", generate);
+
+  // If a payload exists, this page is being used as a redirector.
+  async function handleRedirect() {
+    const params = new URLSearchParams(location.search);
+    const payload = params.get(PARAMETER);
+
+    if (!payload) {
+      input.focus();
+      return;
+    }
+
+    try {
+      const destination = await decodePayload(payload);
+
+      if (!isSafeDestination(destination)) {
+        throw new Error("unsafe destination");
+      }
+
+      location.replace(destination);
+    } catch {
+      location.replace(ERROR_URL);
+    }
+  }
+
+  handleRedirect();
+})();
+</script>
+</body>
+</html>
